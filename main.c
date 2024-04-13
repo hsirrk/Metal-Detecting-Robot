@@ -6,7 +6,6 @@
 #include <math.h>
 #include <string.h>
 
-
 #define SYSCLK 32000000L
 
 #define F_CPU 32000000L
@@ -33,6 +32,8 @@
 //             ----------
 
 #define F_CPU 32000000L
+#define BOOST_BUTTON (GPIOB->IDR & BIT7)
+
 
 // Uses SysTick to delay <us> micro-seconds. 
 
@@ -242,6 +243,11 @@ void SendATCommand (char * s)
 	printf("Response: %s", buff);
 }
 
+int getDiff(int countbase){
+	int count=GetPeriod(100);
+	return abs(count-countbase);
+}
+
 int main(void)
 {
 	long int count, countbase;
@@ -252,10 +258,13 @@ int main(void)
 	float T = 0;
 	float f = 0;
 	int flag = 1;
+	int flag2 = 0;
 	int vx = 0;
 	int vy = 0;
 	int basePWM = 1000;
-	int slowPWM = 500;
+	int slowPWM = 1000;
+	int sped = 0;
+	
 	
 	RCC->IOPENR |= 0x00000001; // peripheral clock enable for port A
 	
@@ -263,6 +272,18 @@ int main(void)
 	// Activate pull up for pin PA8:
 	GPIOA->PUPDR |= BIT16; 
 	GPIOA->PUPDR &= ~(BIT17); 
+	
+	GPIOA->MODER = (GPIOA->MODER & ~(BIT9 | BIT8)) | BIT8;
+	GPIOA->OTYPER &= ~BIT4; // PA4 as push-pull
+	
+	// Set PA5 to general purpose output mode
+	GPIOA->MODER = (GPIOA->MODER & ~(BIT11 | BIT10)) | BIT10;
+	// Set PA5 to push-pull
+	GPIOA->OTYPER &= ~BIT5;
+	
+	GPIOA->MODER = (GPIOA->MODER & ~(BIT13 | BIT12)) | BIT12;
+	// Set PA6 to push-pull
+	GPIOA->OTYPER &= ~BIT6;									
 	
 	Hardware_Init();
 	initUART2(9600);
@@ -272,17 +293,19 @@ int main(void)
 
 	// We should select an unique device ID.  The device ID can be a hex
 	// number from 0x0000 to 0xFFFF.  In this case is set to 0xABBA 
-
+	SendATCommand("AT+DVID7273\r\n");
 	// To check configuration
 	SendATCommand("AT+VER\r\n");
 	SendATCommand("AT+BAUD\r\n");
 	SendATCommand("AT+RFID\r\n");
 	SendATCommand("AT+DVID\r\n");
-	SendATCommand("AT+RFC\r\n");
+	SendATCommand("AT+RFC023\r\n");
 	SendATCommand("AT+POWE\r\n");
 	SendATCommand("AT+CLSS\r\n");
+	//SendATCommand("AT+C2\r\n");
 	
-	SendATCommand("AT+DVID9331\r\n");
+	//SendATCommand("AT+DVID\r\n");
+	
 	
 	printf("\r\nPress and hold a push-button attached to PA8 (pin 18) to transmit.\r\n");
 	
@@ -296,125 +319,299 @@ int main(void)
 			eputc('.');
 			waitms(200);
 		}*/
+		
 		if(ReceivedBytes2()>0) // Something has arrived
 		{
 			egets2(buff, sizeof(buff));	
-			printf("%s", buff);
-			int extracted = sscanf(buff, "%d %d", &vy, &vx);
-			if((strlen(buff)==7)){
-				printf("%d %d\r\n", vy, vx);
+			//printf("%s\n\r", buff);
+			//int extracted = sscanf(buff, "%d %d", &vy, &vx);
+			vy = atoi(&buff[0]);
+			vx = atoi(&buff[3]);
+			if((strlen(buff)==6) && (vy<=33) && (vx<=33)){
+				//printf("direction received: %d %d\r\n", vy, vx);
+				
 			    if(vy == 16 && vx >= 32) {
 			        // Right
-			        printf("right\n\r");
+			        //printf("right\n\r");
 			        pwm1 = pwm2 = basePWM;
 			        pwm3 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR |= BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if(vy == 16 && vx == 0) {
 			        // Left
-			        printf("left\n\r");
+			        //printf("left\n\r");
 			        pwm1 = pwm2 = 0;
 			        pwm3 = pwm4 = basePWM;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR |= BIT6;
 			    } else if(vy >= 32 && vx == 16) {
 			        // Forward
-			        printf("forward\n\r");
-			        pwm2 = pwm3 = basePWM;
+			        //printf("forward\n\r");
+			        pwm2 = basePWM;
+			        pwm3 = basePWM*0.95;
 			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if(vy == 0 && vx == 16) {
 			        // Backward
-			        printf("backward\n\r");
+			        //printf("backward\n\r");
 			        pwm1 = pwm4 = basePWM;
 			        pwm2 = pwm3 = 0;
+			        GPIOA->ODR |= BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if(vy >= 32 && vx >= 32) {
 			        // Diagonal: Forward-Right
-			        printf("diagonal forward-right\n\r");
+			        //printf("diagonal forward-right\n\r");
 			        pwm2 = basePWM;
 			        pwm3 = basePWM * 0.5; // One wheel is moving slower
 			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
 			    } else if(vy >= 32 && vx == 0) {
 			        // Diagonal: Forward-Left
-			        printf("diagonal forward-left\n\r");
+			        //printf("diagonal forward-left\n\r");
 			        pwm3 = basePWM;
-			        pwm2 = basePWM * 0.5; // One wheel is moving slower
+			        pwm2 = basePWM * 0.6; // One wheel is moving slower
 			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR |= BIT6;
 			    } else if(vy == 0 && vx >= 32) {
 			        // Diagonal: Backward-Right
-			        printf("diagonal backward-right\n\r");
+			        //printf("diagonal backward-right\n\r");
 			        pwm4 = basePWM;
 			        pwm1 = basePWM * 0.5; // One wheel is moving slower
 			        pwm2 = pwm3 = 0;
+			        GPIOA->ODR |= BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if(vy == 0 && vx == 0) {
 			        // Diagonal: Backward-Left
-			        printf("diagonal backward-left\n\r");
+			        //printf("diagonal backward-left\n\r");
 			        pwm1 = basePWM;
 			        pwm4 = basePWM * 0.5; // One wheel is moving slower
 			        pwm2 = pwm3 = 0;
+			        GPIOA->ODR |= BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if(vy == 16 && (vx>16&&vx<32)) {
 			        // Right slow
-			        printf("right slow\n\r");
+			        //printf("right slow\n\r");
 			        pwm1 = pwm2 = basePWM;
 			        pwm3 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR |= BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if(vy == 16 && (vx<16&&vx>0)) {
 			        // Left slow
-			        printf("left slow\n\r");
+			        //printf("left slow\n\r");
 			        pwm1 = pwm2 = 0;
-			        pwm3 = pwm4 = slowPWM;
+			        pwm3 = pwm4 = basePWM * 0.5;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR |= BIT6;
 			    } else if((vy<=32&&vy>16) && vx == 16) {
 			        // Forward slow
-			        printf("forward slow\n\r");
-			        pwm2 = pwm3 = slowPWM;
+			        //printf("forward slow\n\r");
+			        pwm2 = pwm3 = basePWM * 0.5;
 			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
 			    } else if((vy>0&&vy<16) && vx == 16) {
 			        // Backward slow
-			        printf("backward slow\n\r");
-			        pwm1 = pwm4 = slowPWM;
+			        //printf("backward slow\n\r");
+			        pwm1 = pwm4 = basePWM * 0.5;
 			        pwm2 = pwm3 = 0;
+			        GPIOA->ODR |= BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if((vy>16&&vy<=32) && (vx>16&&vx<=32)) {
 			        // Diagonal: Forward-Right slow
-			        printf("diagonal forward-right slow\n\r");
-			        pwm2 = slowPWM;
-			        pwm3 = slowPWM * 0.5; // One wheel is moving slower
+			        //printf("diagonal forward-right slow\n\r");
+			        pwm2 = basePWM * 0.5;
+			        pwm3 = basePWM * 0.5 * 0.5; // One wheel is moving slower
 			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR |= BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if((vy>16&&vy<=32) && (vx>0&&vx<16)) {
 			        // Diagonal: Forward-Left slow
-			        printf("diagonal forward-left slow\n\r");
-			        pwm3 = slowPWM;
-			        pwm2 = slowPWM * 0.5; // One wheel is moving slower
+			        //printf("diagonal forward-left slow\n\r");
+			        pwm3 = basePWM * 0.5 * 0.95;
+			        pwm2 = basePWM * 0.5 * 0.5; // One wheel is moving slower
 			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR |= BIT6;
 			    } else if((vy>0&&vy<16) && (vx>16&&vx<=32)) {
 			        // Diagonal: Backward-Right slow
-			        printf("diagonal backward-right slow\n\r");
-			        pwm4 = slowPWM;
-			        pwm1 = slowPWM * 0.5; // One wheel is moving slower
+			        //printf("diagonal backward-right slow\n\r");
+			        pwm4 = basePWM * 0.5;
+			        pwm1 = basePWM * 0.5 * 0.5; // One wheel is moving slower
 			        pwm2 = pwm3 = 0;
+			        GPIOA->ODR |= BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else if((vy>0&&vy<16) && (vx>0&&vx<16)) {
 			        // Diagonal: Backward-Left slow
-			        printf("diagonal backward-left slow\n\r");
-			        pwm1 = slowPWM;
-			        pwm4 = slowPWM * 0.5; // One wheel is moving slower
+			        //printf("diagonal backward-left slow\n\r");
+			        pwm1 = basePWM * 0.5;
+			        pwm4 = basePWM * 0.5 * 0.5; // One wheel is moving slower
 			        pwm2 = pwm3 = 0;
+			        GPIOA->ODR |= BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    } else {
 			        // Stationary
-			        printf("stationary\n\r");
+			        //printf("stationary\n\r");
 			        pwm1 = pwm2 = pwm3 = pwm4 = 0;
+					GPIOA->ODR |= BIT4;
+					GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
 			    }
+	 		} else if(strcmp(buff,"M\n") == 0){
+	 			waitms(5);
+				if(flag==1){
+					countbase=GetPeriod(100);
+					flag=0;
+				}
+				diff = getDiff(countbase);
+				waitms(10);
+				printf("%d\r\n", diff);
+				if(diff<=40){
+					//sprintf(buff, "");
+					eputs2("Strength:1\n");
+				} else if((diff>=40) && (diff<=100)){
+					eputs2("Strength:2\n");
+				} else if((diff>=100) && (diff<=200)){
+					eputs2("Strength:3\n");
+				} else if(diff>=200
+				) {
+					eputs2("Strength:4\n");
+				}
+				//eputs2(buff);
+			 	//itoa(diff, buff, 8);
+				//waitms(10);
+				//printf("sent metal status\r\n");
+				
+	 		} else if(strcmp(buff,"S\n") == 0){
+				if(sped==0){
+					basePWM = 500;
+				} else if(sped==1){
+					basePWM = 1000;
+				} else if(sped==2){
+					basePWM = 2000;
+				}
+				sped++;
+				if(sped%3==0){
+					sped = 0;
+				}
+	 		} else if(strcmp(buff,"C\n") == 0){
+	 			eputs2("0\n");
+	 			while(1){
+	 				printf("square");
+	 				
+	 				pwm2 = basePWM;
+			        pwm3 = basePWM*0.91;
+			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
+			        
+			        int timeout_cnt = 0;
+			        while(1){
+			        	diff = getDiff(countbase);
+			        	printf("%d\r\n", diff);
+			        	if(diff>100){
+			        		pwm1 = pwm2 = pwm3 = pwm4 = 0;
+			        		flag2 = 1;
+			        		eputs2("1\n");
+			        	}
+			        	waitms(1);
+			        	timeout_cnt++;
+			        	if(timeout_cnt>=5000) break;
+			        }
+			        
+			        if(flag2==1) break;
+			        
+			        
+			        pwm2 = basePWM;
+			        pwm3 = 0;
+			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        
+			        timeout_cnt = 0;
+			        while(1){
+			        	diff = getDiff(countbase);
+			        	printf("%d\r\n", diff);
+			        	if(diff>100){
+			        		pwm1 = pwm2 = pwm3 = pwm4 = 0;
+			        		flag2 = 1;
+			        		eputs2("1\n");
+			        	}
+			        	waitms(1);
+			        	timeout_cnt++;
+			        	if(timeout_cnt>=4000) break;
+			        }
+			        
+			        if(flag2==1) break;
+	 				
+	 				pwm2 = basePWM;
+			        pwm3 = basePWM*0.91;
+			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        GPIOA->ODR &= ~BIT5;
+			        GPIOA->ODR &= ~BIT6;
+			        
+			        timeout_cnt = 0;
+			        while(1){
+			        	diff = getDiff(countbase);
+			        	printf("%d\r\n", diff);
+			        	if(diff>100){
+			        		pwm1 = pwm2 = pwm3 = pwm4 = 0;
+			        		flag2 = 1;
+			        		eputs2("1\n");
+			        	}
+			        	waitms(1);
+			        	timeout_cnt++;
+			        	if(timeout_cnt>=5000) break;
+			        }
+			        
+			        if(flag2==1) break;
+			        
+			        
+			        pwm3 = basePWM * 0.86;
+			        pwm2 = 0;
+			        pwm1 = pwm4 = 0;
+			        GPIOA->ODR &= ~BIT4;
+			        
+			        timeout_cnt = 0;
+			        while(1){
+			        	diff = getDiff(countbase);
+			        	printf("%d\r\n", diff);
+			        	if(diff>87){
+			        		pwm1 = pwm2 = pwm3 = pwm4 = 0;
+			        		flag2 = 1;
+			        		eputs2("1\n");
+			        	}
+			        	waitms(1);
+			        	timeout_cnt++;
+			        	if(timeout_cnt>=4000) break;
+			        }
+			        
+			        if(flag2==1) break;
+	 			}	
+	 		} else {
+	 			printf("bad\r\n",buff);
 	 		}
-		}
-		if(flag==1){
-			countbase=GetPeriod(100);
-			flag=0;
-		}
-		count=GetPeriod(100);
-		if(count>0){
-			T=count/(F_CPU*100.0); // Since we have the time of 100 periods, we need to divide by 100
-			f=1.0/T;
-		}
-		
-		diff = abs(count-countbase);
-		printf("%05d\r\n", diff);
-		sprintf(buff, "%07d\n", diff);
-		waitms(150);
-		eputs2(buff);
+		} /*else {
+			printf("no signal\r\n");
+		}*/
+		//printf("Apaarveer\r\n");
+		//waitms(23);
 		//printf("f=%.2dHz, count=%d\r\n", (int)f, count);
-		//waitms(150);
 	//yellow=1 left forwards
 	//white=1 left backwards
 	//red=1 right forwards
